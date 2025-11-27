@@ -1,0 +1,267 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <title>声动引力场 | Sonic Gravity</title>
+    <style>
+        body {
+            margin: 0;
+            overflow: hidden;
+            background-color: #000;
+            color: #fff;
+            font-family: sans-serif;
+            touch-action: none; /* 禁止默认触控 */
+        }
+        canvas {
+            display: block;
+        }
+        #overlay {
+            position: absolute;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            display: flex;
+            flex-direction: column;
+            justify-content: center;
+            align-items: center;
+            background: rgba(0,0,0,0.8);
+            z-index: 10;
+            transition: opacity 0.5s;
+        }
+        button {
+            background: transparent;
+            color: #0ff;
+            border: 2px solid #0ff;
+            padding: 20px 40px;
+            font-size: 1.2rem;
+            border-radius: 30px;
+            cursor: pointer;
+            box-shadow: 0 0 20px #0ff;
+            text-transform: uppercase;
+            font-weight: bold;
+        }
+        #info {
+            position: absolute;
+            bottom: 20px;
+            width: 100%;
+            text-align: center;
+            color: rgba(255,255,255,0.4);
+            font-size: 12px;
+            pointer-events: none;
+        }
+    </style>
+</head>
+<body>
+
+    <div id="overlay">
+        <button id="startBtn">启动引力场</button>
+        <p style="margin-top:20px; opacity:0.7; font-size:0.9rem">需要 麦克风 & 陀螺仪 权限</p>
+    </div>
+
+    <canvas id="canvas"></canvas>
+    <div id="info">晃动手机控制流动 • 对着麦克风吼叫引发爆炸</div>
+
+    <script>
+        const canvas = document.getElementById('canvas');
+        const ctx = canvas.getContext('2d');
+        const startBtn = document.getElementById('startBtn');
+        const overlay = document.getElementById('overlay');
+
+        let width, height;
+        let particles = [];
+        const PARTICLE_COUNT = 300; // 粒子数量，性能好可以调高
+        
+        // 物理参数
+        let gravityX = 0;
+        let gravityY = 0;
+        let friction = 0.96; // 摩擦力，越小越粘稠
+        let bounce = 0.7;    // 弹性，1.0为完全弹性碰撞
+
+        // 音频参数
+        let audioCtx, analyser, dataArray;
+        let isRunning = false;
+        let currentVolume = 0;
+
+        // 初始化画布
+        function resize() {
+            width = canvas.width = window.innerWidth;
+            height = canvas.height = window.innerHeight;
+        }
+        window.addEventListener('resize', resize);
+        resize();
+
+        // 粒子类
+        class Particle {
+            constructor() {
+                this.reset();
+            }
+
+            reset() {
+                this.x = Math.random() * width;
+                this.y = Math.random() * height;
+                this.vx = (Math.random() - 0.5) * 2;
+                this.vy = (Math.random() - 0.5) * 2;
+                this.radius = Math.random() * 3 + 2;
+                this.color = `hsl(${Math.random() * 360}, 100%, 50%)`;
+                this.baseRadius = this.radius;
+            }
+
+            update() {
+                // 1. 应用重力 (来自手机倾斜)
+                // 增强重力感，让流动更顺畅
+                this.vx += gravityX * 0.5;
+                this.vy += gravityY * 0.5;
+
+                // 2. 应用声波爆炸力 (Sonic Boom)
+                // 当音量超过阈值，给所有粒子一个随机的爆炸速度，模拟声波冲击
+                if (currentVolume > 30) { 
+                    const boomForce = currentVolume / 10; 
+                    this.vx += (Math.random() - 0.5) * boomForce;
+                    this.vy += (Math.random() - 0.5) * boomForce;
+                    
+                    // 声音越大，粒子变大
+                    this.radius = this.baseRadius + (currentVolume / 5);
+                    // 颜色变得更亮白
+                    this.color = `hsl(${currentVolume * 2}, 100%, 70%)`;
+                } else {
+                    // 恢复平静
+                    if (this.radius > this.baseRadius) this.radius *= 0.95;
+                    // 颜色慢慢变回原本的
+                    // 这里简单处理，让它在平静时保持流光溢彩
+                    this.color = `hsl(${(this.x / width) * 360 + currentVolume}, 70%, 50%)`;
+                }
+
+                // 3. 应用摩擦力 (空气阻力)
+                this.vx *= friction;
+                this.vy *= friction;
+
+                // 4. 更新位置
+                this.x += this.vx;
+                this.y += this.vy;
+
+                // 5. 边界碰撞检测 (把手机当容器)
+                if (this.x - this.radius < 0) {
+                    this.x = this.radius;
+                    this.vx *= -bounce;
+                } else if (this.x + this.radius > width) {
+                    this.x = width - this.radius;
+                    this.vx *= -bounce;
+                }
+
+                if (this.y - this.radius < 0) {
+                    this.y = this.radius;
+                    this.vy *= -bounce;
+                } else if (this.y + this.radius > height) {
+                    this.y = height - this.radius;
+                    this.vy *= -bounce;
+                }
+            }
+
+            draw() {
+                ctx.beginPath();
+                ctx.arc(this.x, this.y, this.radius, 0, Math.PI * 2);
+                ctx.fillStyle = this.color;
+                
+                // 添加辉光效果，看起来像霓虹灯
+                if (currentVolume > 20) {
+                    ctx.shadowBlur = 15;
+                    ctx.shadowColor = this.color;
+                } else {
+                    ctx.shadowBlur = 0;
+                }
+                
+                ctx.fill();
+            }
+        }
+
+        // 初始化粒子系统
+        function initParticles() {
+            particles = [];
+            for (let i = 0; i < PARTICLE_COUNT; i++) {
+                particles.push(new Particle());
+            }
+        }
+
+        // 动画循环
+        function animate() {
+            if (!isRunning) return;
+
+            // 获取音频数据
+            analyser.getByteFrequencyData(dataArray);
+            // 计算平均音量
+            let sum = 0;
+            for(let i = 0; i < dataArray.length; i++) {
+                sum += dataArray[i];
+            }
+            currentVolume = sum / dataArray.length;
+
+            // 稍微加一点拖尾效果
+            ctx.fillStyle = 'rgba(0, 0, 0, 0.2)'; 
+            ctx.fillRect(0, 0, width, height);
+
+            particles.forEach(p => {
+                p.update();
+                p.draw();
+            });
+
+            requestAnimationFrame(animate);
+        }
+
+        // 传感器处理
+        function handleOrientation(event) {
+            // Beta: 前后倾斜 (-180 ~ 180) -> 映射为 Y轴重力
+            // Gamma: 左右倾斜 (-90 ~ 90) -> 映射为 X轴重力
+            // 限制一下最大重力，防止飞太快穿模
+            let y = event.beta || 0;
+            let x = event.gamma || 0;
+
+            if (x > 90) x = 90; if (x < -90) x = -90;
+            
+            // 简单映射，让重力方向符合直觉
+            gravityX = x / 10; 
+            gravityY = y / 10;
+        }
+
+        async function startApp() {
+            try {
+                // 1. 初始化音频上下文
+                const AudioContext = window.AudioContext || window.webkitAudioContext;
+                audioCtx = new AudioContext();
+                
+                // 2. 获取麦克风流
+                const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+                const source = audioCtx.createMediaStreamSource(stream);
+                analyser = audioCtx.createAnalyser();
+                analyser.fftSize = 64; // 不需要太高精度，只要音量
+                dataArray = new Uint8Array(analyser.frequencyBinCount);
+                source.connect(analyser);
+
+                // 3. 初始化传感器 (iOS 需要权限)
+                if (typeof DeviceOrientationEvent.requestPermission === 'function') {
+                    const permission = await DeviceOrientationEvent.requestPermission();
+                    if (permission !== 'granted') {
+                        alert('需要传感器权限才能控制重力');
+                        return;
+                    }
+                }
+                window.addEventListener('deviceorientation', handleOrientation);
+
+                // 启动
+                initParticles();
+                isRunning = true;
+                overlay.style.opacity = 0;
+                setTimeout(() => overlay.style.display = 'none', 500);
+                animate();
+
+            } catch (err) {
+                alert("启动失败: " + err.message + "\n可能原因：未允许麦克风权限或不在HTTPS环境下。");
+                console.error(err);
+            }
+        }
+
+        startBtn.addEventListener('click', startApp);
+    </script>
+</body>
+</html>
